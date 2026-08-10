@@ -1,0 +1,23 @@
+[
+ {
+  "RuleID": "hashicorp-tf-password",
+  "Description": "Identified a HashiCorp Terraform password field, risking unauthorized infrastructure configuration and security breaches.",
+  "StartLine": 66,
+  "EndLine": 66,
+  "StartColumn": 4,
+  "EndColumn": 34,
+  "Match": "db_password       = \"postgres\" ",
+  "Secret": "\"postgres\"",
+  "File": "infra/terraform/main.tf",
+  "SymlinkFile": "",
+  "Commit": "67266955dcf23e18c7753647ce7ec9c1bacf0459",
+  "Link": "https://github.com/greencypher/SecureFlow-VulnerableCodebase/blob/67266955dcf23e18c7753647ce7ec9c1bacf0459/infra/terraform/main.tf#L66",
+  "Entropy": 2.9219282,
+  "Author": "Dcoder21",
+  "Email": "106084706+Dcoder21@users.noreply.github.com",
+  "Date": "2026-04-17T10:47:29Z",
+  "Message": "Add files via upload",
+  "Tags": [],
+  "Fingerprint": "67266955dcf23e18c7753647ce7ec9c1bacf0459:infra/terraform/main.tf:hashicorp-tf-password:66"
+ }
+]
