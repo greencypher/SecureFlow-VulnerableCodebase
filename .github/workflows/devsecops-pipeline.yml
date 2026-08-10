@@ -30,7 +30,7 @@ jobs:
 
       - name: Upload Gitleaks Report
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: gitleaks-report
           path: gitleaks-report.json
@@ -118,7 +118,7 @@ jobs:
 
       - name: Upload Bandit Report
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: bandit-report
           path: bandit-report.json
@@ -160,7 +160,7 @@ jobs:
 
       - name: Upload Trivy Reports
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: trivy-reports
           path: trivy-reports/
@@ -245,7 +245,7 @@ jobs:
 
       - name: Upload K8s Scan Reports
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: trivy-k8s-reports
           path: trivy-k8s-reports/
@@ -290,7 +290,7 @@ jobs:
 
       - name: Upload Checkov Report
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: checkov-report
           path: checkov-report.json
@@ -454,11 +454,11 @@ jobs:
 
       - name: Download All Reports
         if: always()
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - name: Upload Summary
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: security-scan-summary
           path: SECURITY_SCAN_SUMMARY.md
