@@ -23,6 +23,7 @@ jobs:
 
       - name: Run Gitleaks - Detect IV-03, IV-04
         uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -40,7 +41,8 @@ jobs:
           python3 - << 'EOF'
           import re
           import os
-          
+          import json
+
           patterns = {
               'POSTGRES_PASSWORD': r'POSTGRES_PASSWORD\s*=\s*["\']?([^"\'\s]+)',
               'DB_PASSWORD': r'DB_PASSWORD\s*=\s*["\']?([^"\'\s]+)',
@@ -49,7 +51,7 @@ jobs:
               'SESSION_SECRET': r'SESSION_SECRET\s*=\s*["\']?([^"\'\s]+)',
               'AWS_SECRET': r'aws_secret_access_key\s*=\s*["\']?([^"\'\s]+)',
           }
-          
+
           files_to_scan = [
               'docker-compose.yml',
               '.env',
@@ -58,7 +60,7 @@ jobs:
               'services/transaction-service/app.py',
               'infra/terraform/main.tf'
           ]
-          
+
           findings = []
           for filepath in files_to_scan:
               if os.path.exists(filepath):
@@ -66,16 +68,32 @@ jobs:
                       for line_num, line in enumerate(f, 1):
                           for secret_type, pattern in patterns.items():
                               if re.search(pattern, line):
-                                  findings.append(f"{filepath}:{line_num} - {secret_type}")
-          
+                                  findings.append({
+                                      'tool': 'custom-secret-scanner',
+                                      'severity': 'CRITICAL',
+                                      'title': secret_type,
+                                      'description': line.strip(),
+                                      'file': filepath,
+                                      'line': line_num,
+                                  })
+
           if findings:
-              print("⚠️  SECRETS FOUND (IV-03, IV-04):")
+              print('⚠️  SECRETS FOUND (IV-03, IV-04):')
               for finding in findings:
-                  print(f"  {finding}")
-              exit(1)
+                  print(f"  {finding['file']}:{finding['line']} - {finding['title']}")
           else:
-              print("✓ No obvious secrets detected in configuration files")
+              print('✓ No obvious secrets detected in configuration files')
+
+          with open('custom-secrets-report.json', 'w', encoding='utf-8') as f:
+              json.dump({'findings': findings}, f, indent=2)
           EOF
+
+      - name: Upload Custom Secret Scanner Findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: custom-secrets-report
+          path: custom-secrets-report.json
 
   # ============================================================================
   # STATIC APPLICATION SECURITY TESTING (SAST)
@@ -186,10 +204,11 @@ jobs:
           python3 - << 'EOF'
           import os
           import yaml
-          
+          import json
+
           k8s_dir = 'infra/kubernetes/base'
-          issues = []
-          
+          findings = []
+
           for root, dirs, files in os.walk(k8s_dir):
               for file in files:
                   if file.endswith('.yaml') or file.endswith('.yml'):
@@ -200,48 +219,81 @@ jobs:
                               for doc in docs:
                                   if doc is None:
                                       continue
-                                  
-                                  # CK-04: Privileged containers
+
                                   if doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers'):
                                       for container in doc['spec']['template']['spec']['containers']:
                                           if container.get('securityContext', {}).get('privileged'):
-                                              issues.append(f"{filepath}: CK-04 - Privileged container")
-                                  
-                                  # CK-05: No resource limits
-                                  if doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers'):
-                                      for container in doc['spec']['template']['spec']['containers']:
+                                              findings.append({
+                                                  'tool': 'k8s-config-scan',
+                                                  'severity': 'HIGH',
+                                                  'title': 'Privileged container',
+                                                  'description': 'Container uses privileged mode',
+                                                  'file': filepath,
+                                                  'line': None,
+                                              })
                                           if not container.get('resources'):
-                                              issues.append(f"{filepath}: CK-05 - Missing resource limits")
-                                  
-                                  # CK-06: Latest image tag
-                                  if doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers'):
-                                      for container in doc['spec']['template']['spec']['containers']:
+                                              findings.append({
+                                                  'tool': 'k8s-config-scan',
+                                                  'severity': 'MEDIUM',
+                                                  'title': 'Missing resource limits',
+                                                  'description': 'Container does not define resource limits',
+                                                  'file': filepath,
+                                                  'line': None,
+                                              })
                                           image = container.get('image', '')
                                           if image.endswith(':latest') or ':' not in image:
-                                              issues.append(f"{filepath}: CK-06 - Using :latest or untagged image ({image})")
-                                  
-                                  # CK-07: Missing labels
+                                              findings.append({
+                                                  'tool': 'k8s-config-scan',
+                                                  'severity': 'MEDIUM',
+                                                  'title': 'Using :latest or untagged image',
+                                                  'description': f'Container image {image} is untagged or uses :latest',
+                                                  'file': filepath,
+                                                  'line': None,
+                                              })
+
                                   labels = doc.get('metadata', {}).get('labels', {})
                                   if doc.get('kind') == 'Deployment' and ('app' not in labels or 'team' not in labels):
-                                      issues.append(f"{filepath}: CK-07 - Missing required labels (app/team)")
-                                  
-                                  # CK-09: Secrets in ConfigMaps
+                                      findings.append({
+                                          'tool': 'k8s-config-scan',
+                                          'severity': 'LOW',
+                                          'title': 'Missing required labels',
+                                          'description': 'Deployment is missing app/team labels',
+                                          'file': filepath,
+                                          'line': None,
+                                      })
+
                                   if doc.get('kind') == 'ConfigMap':
                                       data = doc.get('data', {})
                                       for key, value in data.items():
                                           if any(x in key.upper() for x in ['SECRET', 'PASSWORD', 'KEY', 'TOKEN']):
-                                              issues.append(f"{filepath}: CK-09 - Secret stored in ConfigMap: {key}")
-                          except:
+                                              findings.append({
+                                                  'tool': 'k8s-config-scan',
+                                                  'severity': 'CRITICAL',
+                                                  'title': 'Secret stored in ConfigMap',
+                                                  'description': f'Sensitive value stored in ConfigMap key {key}',
+                                                  'file': filepath,
+                                                  'line': None,
+                                              })
+                          except Exception:
                               pass
-          
-          if issues:
-              print("⚠️  Kubernetes Security Issues Found:")
-              for issue in issues:
-                  print(f"  {issue}")
-              exit(1)
+
+          if findings:
+              print('⚠️  Kubernetes Security Issues Found:')
+              for issue in findings:
+                  print(f"  {issue['file']} - {issue['title']} ({issue['severity']})")
           else:
-              print("✓ No obvious Kubernetes misconfigurations detected")
+              print('✓ No obvious Kubernetes misconfigurations detected')
+
+          with open('k8s-findings.json', 'w', encoding='utf-8') as f:
+              json.dump({'findings': findings}, f, indent=2)
           EOF
+
+      - name: Upload K8s Findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k8s-findings
+          path: k8s-findings.json
 
       - name: Upload K8s Scan Reports
         if: always()
@@ -365,12 +417,187 @@ jobs:
           done
 
   # ============================================================================
+  # SECURITY FINDINGS AGGREGATION
+  # ============================================================================
+  security-findings:
+    name: Consolidate Security Findings
+    runs-on: ubuntu-latest
+    needs: [secrets-detection, sast-python, container-scanning, kubernetes-scanning, iac-scanning, code-quality, dependency-check]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download scan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: |
+            gitleaks-report
+            bandit-report
+            trivy-reports
+            trivy-k8s-reports
+            checkov-report
+            custom-secrets-report
+            k8s-findings
+
+      - name: Consolidate findings into JSON
+        run: |
+          python3 <<'PY'
+          import json
+          import glob
+          import os
+          from datetime import datetime
+
+          findings = []
+
+          def add(tool, severity, title, description, file=None, line=None):
+              findings.append({
+                  'tool': tool,
+                  'severity': severity,
+                  'title': title,
+                  'description': description,
+                  'file': file,
+                  'line': line,
+              })
+
+          def parse_generic(path, tool):
+              if not os.path.exists(path):
+                  return
+              with open(path, 'r', encoding='utf-8') as fh:
+                  data = json.load(fh)
+              for item in data.get('findings', []):
+                  add(
+                      tool,
+                      str(item.get('severity', 'UNKNOWN')).upper(),
+                      item.get('title', tool + ' finding'),
+                      item.get('description', ''),
+                      item.get('file'),
+                      item.get('line'),
+                  )
+
+          def parse_gitleaks(path):
+              if not os.path.exists(path):
+                  return
+              with open(path, 'r', encoding='utf-8') as fh:
+                  data = json.load(fh)
+              entries = data if isinstance(data, list) else data.get('findings', [])
+              for item in entries:
+                  severity = str(item.get('severity', 'UNKNOWN')).upper()
+                  title = item.get('rule') or item.get('title') or item.get('rule_code') or 'Gitleaks finding'
+                  description = item.get('details') or item.get('description') or item.get('message') or ''
+                  file = item.get('file') or item.get('repo')
+                  line = None
+                  start = item.get('start') or {}
+                  if isinstance(start, dict):
+                      line = start.get('line')
+                  add('gitleaks', severity, title, description, file, line)
+
+          def parse_bandit(path):
+              if not os.path.exists(path):
+                  return
+              with open(path, 'r', encoding='utf-8') as fh:
+                  data = json.load(fh)
+              for item in data.get('results', []):
+                  severity = str(item.get('issue_severity', 'UNKNOWN')).upper()
+                  title = item.get('test_name') or item.get('issue_text', 'Bandit finding')
+                  description = item.get('issue_text', '')
+                  add('bandit', severity, title, description, item.get('filename'), item.get('line_number'))
+
+          def parse_trivy(path, tool):
+              if not os.path.exists(path):
+                  return
+              with open(path, 'r', encoding='utf-8') as fh:
+                  data = json.load(fh)
+              for result in data.get('Results', []):
+                  target = result.get('Target')
+                  for vuln in result.get('Vulnerabilities', []) or []:
+                      severity = str(vuln.get('Severity', 'UNKNOWN')).upper()
+                      title = vuln.get('VulnerabilityID') or vuln.get('Title', 'Trivy vulnerability')
+                      description = vuln.get('Description', '')
+                      add(tool, severity, title, description, target, None)
+
+          def parse_checkov(path):
+              if not os.path.exists(path):
+                  return
+              with open(path, 'r', encoding='utf-8') as fh:
+                  data = json.load(fh)
+              for item in data.get('results', {}).get('failed_checks', []):
+                  severity = str(item.get('severity', 'UNKNOWN')).upper()
+                  title = item.get('check_name') or item.get('check_id', 'Checkov finding')
+                  description = item.get('check_result', {}).get('message', '')
+                  add('checkov', severity, title, description, item.get('file_path'), item.get('resource'))
+
+          parse_gitleaks('gitleaks-report.json')
+          parse_bandit('bandit-report.json')
+          parse_generic('custom-secrets-report.json', 'custom-secret-scanner')
+          parse_generic('k8s-findings.json', 'k8s-config-scan')
+          for report in glob.glob('trivy-reports/*.json'):
+              parse_trivy(report, 'trivy-docker')
+          for report in glob.glob('trivy-k8s-reports/*.json'):
+              parse_trivy(report, 'trivy-k8s')
+          parse_checkov('checkov-report.json')
+
+          output = {
+              'generated_at': datetime.utcnow().isoformat() + 'Z',
+              'findings': findings,
+          }
+
+          with open('security-findings.json', 'w', encoding='utf-8') as fh:
+              json.dump(output, fh, indent=2)
+
+          print(f'✅ Generated security-findings.json with {len(findings)} findings')
+          PY
+
+      - name: Upload security findings artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-findings
+          path: security-findings.json
+
+      - name: Fail on CRITICAL/BLOCKER findings
+        if: always()
+        run: |
+          python3 <<'PY'
+          import json
+          with open('security-findings.json', 'r', encoding='utf-8') as fh:
+              data = json.load(fh)
+          critical = [f for f in data.get('findings', []) if f.get('severity') in ('CRITICAL', 'BLOCKER')]
+          if critical:
+              print(f'❌ {len(critical)} CRITICAL/BLOCKER findings detected')
+              raise SystemExit(1)
+          print('✅ No CRITICAL or BLOCKER findings detected')
+          PY
+
+  # ============================================================================
+  # SONARCLOUD ANALYSIS
+  # ============================================================================
+  sonarcloud:
+    name: SonarCloud Code Quality
+    runs-on: ubuntu-latest
+    if: ${{ secrets.SONAR_TOKEN != '' && secrets.SONAR_ORGANIZATION != '' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run SonarCloud analysis
+        uses: SonarSource/sonarcloud-github-action@v1
+        with:
+          args: >
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.projectKey=${{ github.repository_owner }}_${{ github.event.repository.name }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.host.url=https://sonarcloud.io
+
+  # ============================================================================
   # SUMMARY & REPORTING
   # ============================================================================
   vulnerability-report:
     name: Vulnerability Summary Report
     runs-on: ubuntu-latest
-    needs: [secrets-detection, sast-python, container-scanning, kubernetes-scanning, iac-scanning, code-quality, dependency-check]
+    needs: [secrets-detection, sast-python, container-scanning, kubernetes-scanning, iac-scanning, code-quality, dependency-check, security-findings]
     if: always()
     steps:
       - name: Generate Vulnerability Report

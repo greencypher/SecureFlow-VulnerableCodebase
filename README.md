@@ -141,7 +141,6 @@ Everything in this list is your job to build, based on the project brief:
 
 - `.github/workflows/*` — the GitHub Actions pipeline
 - `.gitleaks.toml` — custom Gitleaks rules for Flask/JWT/DB patterns
-- `sonar-project.properties` — SonarQube configuration
 - `pipeline/scripts/security-gate.sh` — the aggregation script
 - Cosign keys and signing workflow
 - OPA Gatekeeper ConstraintTemplates and Constraints
@@ -151,6 +150,24 @@ Everything in this list is your job to build, based on the project brief:
 - Hardened Kustomize overlays (the `base/` here is the broken version)
 - Prometheus configuration and Grafana dashboards
 - OWASP ZAP scan configuration
+
+---
+
+## SonarCloud Integration
+
+This repository now includes a SonarCloud configuration file and GitHub Actions support for SonarCloud analysis.
+
+SonarCloud is free for public repositories. To enable it on your fork:
+
+1. Fork this repository on GitHub.
+2. Log in to SonarCloud and import your fork as a new project.
+3. Set the GitHub repository secrets:
+   - `SONAR_TOKEN`
+   - `SONAR_ORGANIZATION`
+4. Make sure your SonarCloud project key is set to `<GitHubOrg>_<RepoName>` or update `sonar.projectKey` in `sonar-project.properties`.
+5. The job `sonarcloud` in `.github/workflows/devsecops-pipeline.yml` runs analysis on `main` and `develop`.
+
+If you already have a fork remote configured, the workflow will use the fork owner and repo name to construct the default SonarCloud project key.
 
 If you find yourself adding a file and wondering whether it belongs in the
 baseline or the solution — it's in the solution. The baseline is broken; you
