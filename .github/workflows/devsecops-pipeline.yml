@@ -72,8 +72,9 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
-            SONAR_ORGANIZATION=obafemi-samuel-agbi
-            SONAR_PROJECT_KEY=obafemi-samuel-agbi_secureflow-vulnerablecodebase
+              -Dsonar.organization=obafemi-samuel-agbi 
+              -Dsonar.projectKey=obafemi-samuel-agbi_secureflow-vulnerablecodebase 
+              -Dsonar.sources=.
 
       - name: Retrieve SonarQube findings
         env:
