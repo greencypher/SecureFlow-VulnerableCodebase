@@ -8,6 +8,9 @@ on:
       - main
       - develop
 
+permissions:
+  contents: read
+
 jobs:
   # ============================================================================
   # SECRETS & CREDENTIALS SCANNING
@@ -72,7 +75,7 @@ jobs:
                                       'tool': 'custom-secret-scanner',
                                       'severity': 'CRITICAL',
                                       'title': secret_type,
-                                      'description': line.strip(),
+                                      'description': f'{secret_type} detected; value redacted',
                                       'file': filepath,
                                       'line': line_num,
                                   })
@@ -192,6 +195,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install PyYAML
+        run: python3 -m pip install --disable-pip-version-check pyyaml -q
 
       - name: Run Trivy - K8s Config Scan
         run: |
@@ -410,11 +416,34 @@ jobs:
 
       - name: Check Python Dependencies
         run: |
-          echo "Scanning Python dependencies for known vulnerabilities..."
-          for req_file in $(find services -name "requirements.txt"); do
+          set +e
+          mkdir -p pip-audit-reports
+          found=0
+          while IFS= read -r -d '' req_file; do
+            found=1
+            service_name="$(basename "$(dirname "$req_file")")"
+            report="pip-audit-reports/${service_name}.json"
             echo "Scanning $req_file..."
-            pip-audit --requirement "$req_file" --desc || true
-          done
+            pip-audit --requirement "$req_file" --format json --output "$report" --desc
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              echo "pip-audit reported vulnerabilities for $req_file"
+            fi
+          done < <(find services -name "requirements.txt" -print0)
+
+          if [ "$found" -eq 0 ]; then
+            echo "No requirements.txt files found under services/"
+            printf '{"dependencies":[]}' > pip-audit-reports/no-requirements.json
+          fi
+          exit 0
+
+      - name: Upload pip-audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-reports
+          path: pip-audit-reports/
+          if-no-files-found: ignore
 
   # ============================================================================
   # SECURITY FINDINGS AGGREGATION
@@ -428,17 +457,61 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download scan artifacts
+      - name: Download Gitleaks report
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
-          name: |
-            gitleaks-report
-            bandit-report
-            trivy-reports
-            trivy-k8s-reports
-            checkov-report
-            custom-secrets-report
-            k8s-findings
+          name: gitleaks-report
+          path: .
+
+      - name: Download Bandit report
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: bandit-report
+          path: .
+
+      - name: Download Trivy Docker reports
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: trivy-reports
+          path: .
+
+      - name: Download Trivy Kubernetes reports
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: trivy-k8s-reports
+          path: .
+
+      - name: Download Checkov report
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: checkov-report
+          path: .
+
+      - name: Download custom secret report
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: custom-secrets-report
+          path: .
+
+      - name: Download Kubernetes findings
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: k8s-findings
+          path: .
+
+      - name: Download pip-audit reports
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: pip-audit-reports
+          path: .
 
       - name: Consolidate findings into JSON
         run: |
@@ -446,7 +519,7 @@ jobs:
           import json
           import glob
           import os
-          from datetime import datetime
+          from datetime import datetime, timezone
 
           findings = []
 
@@ -480,17 +553,26 @@ jobs:
                   return
               with open(path, 'r', encoding='utf-8') as fh:
                   data = json.load(fh)
+
               entries = data if isinstance(data, list) else data.get('findings', [])
               for item in entries:
-                  severity = str(item.get('severity', 'UNKNOWN')).upper()
-                  title = item.get('rule') or item.get('title') or item.get('rule_code') or 'Gitleaks finding'
-                  description = item.get('details') or item.get('description') or item.get('message') or ''
-                  file = item.get('file') or item.get('repo')
-                  line = None
-                  start = item.get('start') or {}
-                  if isinstance(start, dict):
-                      line = start.get('line')
-                  add('gitleaks', severity, title, description, file, line)
+                  # Gitleaks JSON findings are reported as secrets; treat them
+                  # as CRITICAL so the final gate cannot silently ignore them.
+                  title = (
+                      item.get('RuleID')
+                      or item.get('rule')
+                      or item.get('title')
+                      or 'Gitleaks finding'
+                  )
+                  description = (
+                      item.get('Description')
+                      or item.get('description')
+                      or item.get('message')
+                      or 'Potential secret detected'
+                  )
+                  file = item.get('File') or item.get('file')
+                  line = item.get('StartLine') or item.get('start_line')
+                  add('gitleaks', 'CRITICAL', title, description, file, line)
 
           def parse_bandit(path):
               if not os.path.exists(path):
@@ -508,13 +590,43 @@ jobs:
                   return
               with open(path, 'r', encoding='utf-8') as fh:
                   data = json.load(fh)
-              for result in data.get('Results', []):
+
+              for result in data.get('Results', []) or []:
                   target = result.get('Target')
+
                   for vuln in result.get('Vulnerabilities', []) or []:
                       severity = str(vuln.get('Severity', 'UNKNOWN')).upper()
                       title = vuln.get('VulnerabilityID') or vuln.get('Title', 'Trivy vulnerability')
                       description = vuln.get('Description', '')
-                      add(tool, severity, title, description, target, None)
+                      add(tool, severity, title, description, target, vuln.get('InstalledVersion'))
+
+                  for misconfig in result.get('Misconfigurations', []) or []:
+                      severity = str(misconfig.get('Severity', 'UNKNOWN')).upper()
+                      title = misconfig.get('ID') or misconfig.get('Title', 'Trivy misconfiguration')
+                      description = misconfig.get('Message') or misconfig.get('Description', '')
+                      file = misconfig.get('CauseMetadata', {}).get('Resource') or target
+                      line = misconfig.get('CauseMetadata', {}).get('StartLine')
+                      add(tool, severity, title, description, file, line)
+
+          def parse_pip_audit(path):
+              if not os.path.exists(path):
+                  return
+              with open(path, 'r', encoding='utf-8') as fh:
+                  data = json.load(fh)
+
+              for vuln in data.get('dependencies', []) or []:
+                  for issue in vuln.get('vulns', []) or []:
+                      severity = str(issue.get('severity', 'HIGH')).upper()
+                      title = issue.get('id', 'pip-audit vulnerability')
+                      description = issue.get('description', '')
+                      add(
+                          'pip-audit',
+                          severity,
+                          title,
+                          description,
+                          vuln.get('name'),
+                          issue.get('fix_versions')
+                      )
 
           def parse_checkov(path):
               if not os.path.exists(path):
@@ -536,9 +648,11 @@ jobs:
           for report in glob.glob('trivy-k8s-reports/*.json'):
               parse_trivy(report, 'trivy-k8s')
           parse_checkov('checkov-report.json')
+          for report in glob.glob('pip-audit-reports/*.json'):
+              parse_pip_audit(report)
 
           output = {
-              'generated_at': datetime.utcnow().isoformat() + 'Z',
+              'generated_at': datetime.now(timezone.utc).isoformat(),
               'findings': findings,
           }
 
@@ -568,124 +682,74 @@ jobs:
               raise SystemExit(1)
           print('✅ No CRITICAL or BLOCKER findings detected')
           PY
-
-  # ============================================================================
-  # SONARCLOUD ANALYSIS
-  # ============================================================================
-  sonarcloud:
-    name: SonarCloud Code Quality
+ # =========================
+  # SONARQUBE
+  # =========================
+  Sast-scan:
+    name: SonarQube Cloud Scan
     runs-on: ubuntu-latest
-    if: ${{ secrets.SONAR_TOKEN != '' && secrets.SONAR_ORGANIZATION != '' }}
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Run SonarCloud analysis
-        uses: SonarSource/sonarcloud-github-action@v1
+      - name: Run SonarQube scan
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
-            -Dsonar.projectKey=${{ github.repository_owner }}_${{ github.event.repository.name }}
-            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
-            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.organization=benburg-git
+            -Dsonar.projectKey=Benburg-git_SecureFlow-VulnerableCodebase
+            -Dsonar.sources=.
 
-  # ============================================================================
-  # SUMMARY & REPORTING
-  # ============================================================================
-  vulnerability-report:
-    name: Vulnerability Summary Report
-    runs-on: ubuntu-latest
-    needs: [secrets-detection, sast-python, container-scanning, kubernetes-scanning, iac-scanning, code-quality, dependency-check, security-findings]
-    if: always()
-    steps:
-      - name: Generate Vulnerability Report
+      - name: Retrieve SonarQube findings
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PROJECT_KEY: Benburg-git_SecureFlow-VulnerableCodebase
         run: |
-          cat > SECURITY_SCAN_SUMMARY.md << 'EOF'
-          # SecureFlow Security Scan Summary
-          
-          ## Vulnerability Detection Coverage
-          
-          ### 🔐 Infrastructure Vulnerabilities (IV-*)
-          - [x] IV-01: Hardcoded DB passwords - via custom scanner
-          - [x] IV-02: Exposed database ports - via configuration review
-          - [x] IV-03: Secrets in environment variables - Gitleaks + custom scanner
-          - [x] IV-04: Secrets in .env file - Gitleaks + custom scanner
-          - [x] IV-05: Containers running as root - via Dockerfile analysis
-          - [x] IV-06: Missing resource limits - via docker-compose.yml review
-          - [x] IV-07: No network segmentation - via docker-compose.yml review
-          - [x] IV-08: Overly permissive IAM - Checkov + Terraform scan
-          - [x] IV-09: Unencrypted S3 buckets - Checkov + Terraform scan
-          - [x] IV-10: EKS nodes in public subnets - Checkov + Terraform scan
-          
-          ### 🔑 Authentication Vulnerabilities (AV-*)
-          - [x] AV-01: SQL Injection on /login - Bandit + code pattern matching
-          - [x] AV-02: SQL Injection on /register - Bandit + code pattern matching
-          - [x] AV-03: JWT forgery - Code review
-          - [x] AV-04: Brute force - No rate limiting detected
-          - [x] AV-05: Insecure password storage (MD5) - Code review
-          - [x] AV-06: Admin panel authorization bypass - Code review
-          - [x] AV-07: Hardcoded JWT secret - Custom scanner + code search
-          - [x] AV-08: Sensitive data in errors - Bandit + code review
-          
-          ### 💳 Transaction Service Vulnerabilities (TV-*)
-          - [x] TV-01: IDOR on account balance - Code review
-          - [x] TV-02: IDOR on transaction history - Code review
-          - [x] TV-03: Negative transfer amount - Bandit + code pattern matching
-          - [x] TV-04: Mass assignment vulnerability - Code review
-          - [x] TV-05: Balance overflow - Code review
-          - [x] TV-06: Missing CSRF protection - Code pattern matching
-          - [x] TV-07: Unauthenticated transfer (expired JWT) - Code review
-          
-          ### 🎨 Frontend Vulnerabilities (FV-*)
-          - [x] FV-01: Reflected XSS - Code pattern matching + security headers check
-          - [x] FV-02: Stored XSS - Code pattern matching + autoescape check
-          - [x] FV-03: Session hijacking - Secret scan
-          - [x] FV-05: CSRF - Code pattern matching
-          - [x] FV-06: Clickjacking - Security headers check
-          - [x] FV-07: Missing security headers - Code pattern matching
-          
-          ### 🐳 Container & Kubernetes Vulnerabilities (CK-*)
-          - [x] CK-01: Vulnerable base image (python:3.9) - Trivy + code review
-          - [x] CK-02: No non-root user - Dockerfile analysis
-          - [x] CK-03: Unpinned image tags - Code review
-          - [x] CK-04: Privileged containers - Trivy K8s scan
-          - [x] CK-05: No resource limits - Trivy K8s scan
-          - [x] CK-06: :latest image tag - Trivy K8s scan + code review
-          - [x] CK-07: Missing labels - Trivy K8s scan
-          - [x] CK-08: No NetworkPolicy - K8s manifest review
-          - [x] CK-09: Secrets in ConfigMaps - Trivy K8s scan
-          
-          ## Scanning Tools Deployed
-          
-          | Tool | Purpose | Status |
-          |------|---------|--------|
-          | Gitleaks | Secret detection in git history | ✅ Active |
-          | Bandit | Python SAST analysis | ✅ Active |
-          | Trivy | Container and K8s scanning | ✅ Active |
-          | Checkov | Infrastructure as Code (Terraform) | ✅ Active |
-          | pip-audit | Python dependency vulnerabilities | ✅ Active |
-          | Custom Scanners | Dockerfile, K8s YAML, code patterns | ✅ Active |
-          
-          ## Next Steps
-          
-          1. Review scan results in job artifacts
-          2. Prioritize critical findings (secrets, SQL injection, IDOR)
-          3. Implement remediation from VULNERABILITIES.md
-          4. Re-run pipeline to verify fixes
-          
-          Generated: $(date -u)
-          EOF
-          cat SECURITY_SCAN_SUMMARY.md
+          curl -sS \
+            -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/issues/search?componentKeys=${SONAR_PROJECT_KEY}&statuses=OPEN,CONFIRMED,REOPENED&ps=500" \
+            -o sonar-issues.json
 
-      - name: Download All Reports
-        if: always()
-        uses: actions/download-artifact@v4
+          jq --arg project "$SONAR_PROJECT_KEY" '{
+            project: $project,
+            issues: [
+              .issues[] |
+              {
+                key: .key,
+                rule: .rule,
+                severity: .severity,
+                type: .type,
+                message: .message,
+                component: .component,
+                line: .line,
+                status: .status
+              }
+            ]
+          }' sonar-issues.json > sonar-findings.json
 
-      - name: Upload Summary
+      - name: Upload SonarQube findings
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: security-scan-summary
-          path: SECURITY_SCAN_SUMMARY.md
+          name: sonar-findings
+          path: sonar-findings.json
+
+      - name: Enforce SonarQube security gate
+        run: |
+          critical=$(jq '[.issues[] | select(.severity == "CRITICAL")] | length' sonar-findings.json)
+          blocker=$(jq '[.issues[] | select(.severity == "BLOCKER")] | length' sonar-findings.json)
+
+          echo "CRITICAL findings: $critical"
+          echo "BLOCKER findings: $blocker"
+
+          if [ "$critical" -gt 0 ] || [ "$blocker" -gt 0 ]; then
+            echo "::error::SonarQube security gate FAILED"
+            exit 1
+          fi
+
+          echo "SonarQube security gate PASSED"
