@@ -1,237 +1,28 @@
-# Gitleaks Configuration for SecureFlow
-# Custom rules to detect Flask secrets and database connection strings
-# Usage: gitleaks detect --config .gitleaks.toml
+title = "SecureFlow custom Gitleaks rules"
 
-title = "SecureFlow Gitleaks Configuration"
-description = "Custom detection rules for Flask, database credentials, and AWS secrets"
-version = "1.0"
+[extend]
+useDefault = true
 
-# Define the allowlist - entries here will not trigger alerts
-[allowlist]
-description = "Allowlist entries to exclude false positives"
-paths = [
-  '''(?i)\.gitleaks\.toml''',
-  '''(?i)VULNERABILITIES\.md''',
-  '''(?i)README\.md''',
-  '''(?i)test.*\.py''',
-  '''(?i)mock''',
-]
-commits = [
-  "allowlisted_commit_hash_example"
-]
-regexes = [
-  '''(?i)changeme''',
-  '''(?i)example''',
-  '''(?i)placeholder''',
-  '''(?i)test''',
-]
-
-# ============================================================================
-# CUSTOM RULES FOR SECUREFLOW
-# ============================================================================
-
-# Rule 1: Flask SECRET_KEY detection
 [[rules]]
 id = "flask-secret-key"
-description = "Detects Flask application SECRET_KEY assignments"
-entropy = 3.0
-regex = '''(?i)(?:flask_)?secret_key\s*=\s*['\"]([^'\"]{8,})['\"]'''
-keywords = ["secret_key", "SECRET_KEY", "flask"]
-severity = "CRITICAL"
+description = "Detect hardcoded Flask SECRET_KEY, JWT_SECRET, or SESSION_SECRET values"
+regex = '''(?i)(SECRET_KEY|JWT_SECRET|SESSION_SECRET)\s*[:=]\s*['"]?[A-Za-z0-9_./+=-]{4,}['"]?'''
+tags = ["flask", "secret", "hardcoded"]
 
-# Rule 2: JWT Secret Key detection
 [[rules]]
-id = "jwt-secret-key"
-description = "Detects hardcoded JWT secret keys"
-entropy = 2.8
-regex = '''(?i)(?:jwt_secret|jwt_key|secret_key.*jwt)\s*[:=]\s*['\"]([^'\"]{8,})['\"]'''
-keywords = ["jwt", "secret", "token"]
-severity = "CRITICAL"
+id = "postgres-password"
+description = "Detect hardcoded PostgreSQL database passwords"
+regex = '''(?i)(DB_PASSWORD|DATABASE_PASSWORD|POSTGRES_PASSWORD|PGPASSWORD)\s*[:=]\s*['"]?[^\s'"]{4,}['"]?'''
+tags = ["database", "postgresql", "password"]
 
-# Rule 3: PostgreSQL connection strings
 [[rules]]
 id = "postgres-connection-string"
-description = "Detects PostgreSQL database connection strings with credentials"
-entropy = 3.0
-regex = '''(?i)postgres(?:ql)?://[^\s:]+:[^\s@]+@[^\s/]+(?:/[^\s]*)?\b'''
-keywords = ["postgres", "postgresql", "password", "connection", "url"]
-severity = "CRITICAL"
+description = "Detect PostgreSQL connection strings containing embedded credentials"
+regex = '''(?i)postgres(ql)?://[^:\s'"]+:[^@\s'"]+@[^/\s'"]+(/[^\s?'"]*)?(\?[^\s'"]*)?'''
+tags = ["database", "postgresql", "connection-string", "credential"]
 
-# Rule 4: PostgreSQL password in environment
 [[rules]]
-id = "postgres-password-env"
-description = "Detects POSTGRES_PASSWORD environment variable assignments"
-entropy = 2.5
-regex = '''(?i)POSTGRES_PASSWORD\s*=\s*['\"]?([^'\":\s]{6,})['\"]?'''
-keywords = ["postgres", "password", "database"]
-severity = "CRITICAL"
-
-# Rule 5: Generic database password detection
-[[rules]]
-id = "db-password"
-description = "Detects database password environment variables"
-entropy = 2.5
-regex = '''(?i)(?:DB_PASSWORD|DATABASE_PASSWORD|db_pass)\s*=\s*['\"]?([^'\":\s]{6,})['\"]?'''
-keywords = ["password", "database", "db"]
-severity = "CRITICAL"
-
-# Rule 6: Session Secret detection
-[[rules]]
-id = "session-secret"
-description = "Detects Flask session secret key assignments"
-entropy = 2.5
-regex = '''(?i)(?:SESSION_SECRET|SESSION_KEY)\s*=\s*['\"]?([^'\":\s]{6,})['\"]?'''
-keywords = ["session", "secret", "key"]
-severity = "HIGH"
-
-# Rule 7: AWS Access Key ID
-[[rules]]
-id = "aws-access-key"
-description = "Detects AWS Access Key IDs"
-entropy = 3.5
-regex = '''(?i)(?:aws_access_key_id|access_key)\s*=\s*['\"]?(AKIA[0-9A-Z]{16})['\"]?'''
-keywords = ["aws", "access", "key"]
-severity = "CRITICAL"
-
-# Rule 8: AWS Secret Access Key
-[[rules]]
-id = "aws-secret-key"
-description = "Detects AWS Secret Access Keys"
-entropy = 3.5
-regex = '''(?i)(?:aws_secret_access_key|secret_access_key)\s*=\s*['\"]([^'\"]{40})['\"]'''
-keywords = ["aws", "secret", "access", "key"]
-severity = "CRITICAL"
-
-# Rule 9: Database password in docker-compose format
-[[rules]]
-id = "docker-db-password"
-description = "Detects database passwords in docker-compose environment format"
-entropy = 2.5
-regex = '''(?i)(?:POSTGRES_PASSWORD|MYSQL_ROOT_PASSWORD|DB_PASSWORD)\s*=\s*['\"]?([^'\":\s]{6,})['\"]?'''
-keywords = ["password", "docker", "compose", "database"]
-severity = "CRITICAL"
-
-# Rule 10: PyJWT Secret detection
-[[rules]]
-id = "pyjwt-secret"
-description = "Detects PyJWT secret key assignments with hardcoded values"
-entropy = 2.8
-regex = '''(?i)(?:jwt\.encode|jwt\.decode).*secret\s*=\s*['\"]([^'\"]{8,})['\"]'''
-keywords = ["jwt", "pyjwt", "secret", "encode", "decode"]
-severity = "CRITICAL"
-
-# Rule 11: MongoDB connection string
-[[rules]]
-id = "mongodb-connection"
-description = "Detects MongoDB connection strings with credentials"
-entropy = 3.0
-regex = '''(?i)mongodb(?:\+srv)?://[^\s:]+:[^\s@]+@[^\s/]+(?:/[^\s]*)?\b'''
-keywords = ["mongodb", "mongo", "password", "connection"]
-severity = "CRITICAL"
-
-# Rule 12: MySQL connection string
-[[rules]]
-id = "mysql-connection"
-description = "Detects MySQL connection strings with credentials"
-entropy = 3.0
-regex = '''(?i)mysql://[^\s:]+:[^\s@]+@[^\s/]+(?:/[^\s]*)?\b'''
-keywords = ["mysql", "password", "connection", "database"]
-severity = "CRITICAL"
-
-# Rule 13: Generic API Key detection
-[[rules]]
-id = "api-key"
-description = "Detects hardcoded API keys"
-entropy = 3.0
-regex = '''(?i)(?:api_key|apikey|api-key|api_secret)\s*[:=]\s*['\"]([^'\"]{16,})['\"]'''
-keywords = ["api", "key", "secret", "token"]
-severity = "HIGH"
-
-# Rule 14: Terraform provider credentials
-[[rules]]
-id = "terraform-credentials"
-description = "Detects credentials in Terraform configuration"
-entropy = 3.0
-regex = '''(?i)(?:access_key|secret_key|password|token)\s*=\s*['\"]([^'\"]{8,})['\"]'''
-keywords = ["terraform", "provider", "aws", "password"]
-severity = "CRITICAL"
-
-# Rule 15: Private key detection
-[[rules]]
-id = "private-key"
-description = "Detects private key files (PEM, RSA, EC)"
-entropy = 4.0
-regex = '''-----BEGIN\s+(?:RSA|EC|OPENSSH|PGP)?\s*PRIVATE\s+KEY.*-----'''
-keywords = ["private", "key", "pem", "rsa"]
-severity = "CRITICAL"
-
-# Rule 16: Bearer token detection
-[[rules]]
-id = "bearer-token"
-description = "Detects hardcoded bearer tokens"
-entropy = 3.5
-regex = '''(?i)(?:authorization|bearer)\s*[:=]\s*['\"]?Bearer\s+([A-Za-z0-9._-]{20,})['\"]?'''
-keywords = ["bearer", "token", "authorization", "auth"]
-severity = "HIGH"
-
-# Rule 17: JWT token pattern
-[[rules]]
-id = "jwt-token"
-description = "Detects hardcoded JWT tokens"
-entropy = 3.5
-regex = '''eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.([A-Za-z0-9_-]*)'''
-keywords = ["jwt", "token"]
-severity = "MEDIUM"
-
-# Rule 18: Slack webhook
-[[rules]]
-id = "slack-webhook"
-description = "Detects Slack webhook URLs"
-entropy = 3.5
-regex = '''https://hooks\.slack\.com/services/[A-Za-z0-9/]+'''
-keywords = ["slack", "webhook", "url"]
-severity = "HIGH"
-
-# Rule 19: GitHub token
-[[rules]]
-id = "github-token"
-description = "Detects GitHub personal access tokens"
-entropy = 3.5
-regex = '''(?i)(?:github[_-]?token|gh[_-]?token|github[_-]?secret)\s*[:=]\s*['\"]?([ghs_][A-Za-z0-9_]{36,255})['\"]?'''
-keywords = ["github", "token", "ghs", "ghp"]
-severity = "CRITICAL"
-
-# Rule 20: Docker registry credentials
-[[rules]]
-id = "docker-credentials"
-description = "Detects Docker registry credentials and auth tokens"
-entropy = 3.0
-regex = '''(?i)docker(?:hub|_)?(?:password|token|auth)\s*[:=]\s*['\"]([^'\"]{8,})['\"]'''
-keywords = ["docker", "registry", "credentials", "auth"]
-severity = "HIGH"
-
-# ============================================================================
-# ALLOWLIST EXCEPTIONS (specific to SecureFlow)
-# ============================================================================
-
-# Allow example values in documentation
-[[allowlist]]
-description = "Allow placeholder passwords in documentation"
-regexes = [
-  '''(?i)(?:EXAMPLE|PLACEHOLDER|TEST|DUMMY)''',
-  '''(?i)changeme''',
-  '''(?i)password123''',
-  '''(?i)admin''',
-]
-
-# Allow specific non-sensitive files
-[[allowlist]]
-description = "Allow specific documentation and test files"
-paths = [
-  '''(?i)README\.md''',
-  '''(?i)VULNERABILITIES\.md''',
-  '''(?i)\.md$''',
-  '''(?i)test.*\.py''',
-  '''(?i)mock''',
-  '''(?i)example''',
-]
+id = "database-url"
+description = "Detect hardcoded database connection URLs containing credentials"
+regex = '''(?i)(DATABASE_URL|DB_URL|DATABASE_URI|DB_URI)\s*[:=]\s*['"]?(postgres(ql)?|mysql|mariadb|mongodb(\+srv)?)://[^'"\s]+['"]?'''
+tags = ["database", "connection-string", "credential"]
