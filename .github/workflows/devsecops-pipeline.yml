@@ -12,88 +12,44 @@ permissions:
   contents: read
 
 jobs:
-  # ============================================================================
-  # SECRETS & CREDENTIALS SCANNING
-  # ============================================================================
-  secrets-detection:
-    name: Secrets Detection (Gitleaks)
+  # =========================
+  # GITLEAKS SECRET SCAN
+  # =========================
+  secret-scan:
+    name: Gitleaks Secret Scan
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
     steps:
-      - name: Checkout code
+      - name: Checkout repository (full history)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks - Detect IV-03, IV-04
-        uses: gitleaks/gitleaks-action@v2
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: --log-opts='--all' --report-format json --report-path gitleaks-report.json
+      - name: Install Gitleaks
+        run: |
+          GITLEAKS_VERSION=$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep '"tag_name"' | cut -d '"' -f4 | sed 's/v//')
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
 
-      - name: Upload Gitleaks Report
+      - name: Run Gitleaks (full history scan)
+        run: |
+          gitleaks detect \
+            --source . \
+            --log-opts="--all" \
+            --config .gitleaks.toml \
+            --report-format json \
+            --report-path gitleaks-report.json \
+            --redact \
+            --exit-code 1
+
+      - name: Upload Gitleaks report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gitleaks-report
           path: gitleaks-report.json
-
-      - name: Custom Secret Scanner
-        run: |
-          python3 - << 'EOF'
-          import re
-          import os
-          import json
-
-          patterns = {
-              'POSTGRES_PASSWORD': r'POSTGRES_PASSWORD\s*=\s*["\']?([^"\'\s]+)',
-              'DB_PASSWORD': r'DB_PASSWORD\s*=\s*["\']?([^"\'\s]+)',
-              'SECRET_KEY': r'SECRET_KEY\s*=\s*["\']([^"\']+)',
-              'JWT_SECRET': r'JWT_SECRET\s*=\s*["\']?([^"\'\s]+)',
-              'SESSION_SECRET': r'SESSION_SECRET\s*=\s*["\']?([^"\'\s]+)',
-              'AWS_SECRET': r'aws_secret_access_key\s*=\s*["\']?([^"\'\s]+)',
-          }
-
-          files_to_scan = [
-              'docker-compose.yml',
-              '.env',
-              'services/auth-service/app.py',
-              'services/frontend/app.py',
-              'services/transaction-service/app.py',
-              'infra/terraform/main.tf'
-          ]
-
-          findings = []
-          for filepath in files_to_scan:
-              if os.path.exists(filepath):
-                  with open(filepath, 'r') as f:
-                      for line_num, line in enumerate(f, 1):
-                          for secret_type, pattern in patterns.items():
-                              if re.search(pattern, line):
-                                  findings.append({
-                                      'tool': 'custom-secret-scanner',
-                                      'severity': 'CRITICAL',
-                                      'title': secret_type,
-                                      'description': f'{secret_type} detected; value redacted',
-                                      'file': filepath,
-                                      'line': line_num,
-                                  })
-
-          if findings:
-              print('⚠️  SECRETS FOUND (IV-03, IV-04):')
-              for finding in findings:
-                  print(f"  {finding['file']}:{finding['line']} - {finding['title']}")
-          else:
-              print('✓ No obvious secrets detected in configuration files')
-
-          with open('custom-secrets-report.json', 'w', encoding='utf-8') as f:
-              json.dump({'findings': findings}, f, indent=2)
-          EOF
-
-      - name: Upload Custom Secret Scanner Findings
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: custom-secrets-report
-          path: custom-secrets-report.json
