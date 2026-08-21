@@ -170,9 +170,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sonar-findings
-          path: sonar-findings.json
-          if-no-files-found: error
+         name: sonar-findings-${{ github.run_id }}-${{ github.run_attempt }}
+         path: sonar-findings.json
+         if-no-files-found: error
 
       # =========================
       # SECURITY GATE
