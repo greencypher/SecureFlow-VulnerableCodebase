@@ -124,3 +124,85 @@ jobs:
           fi
 
           echo "SonarQube security gate PASSED"
+
+      # =========================
+      # DETECT AND ROUTE SONARQUBE FINDINGS
+      # =========================
+      - name: Retrieve SonarQube findings
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PROJECT_KEY: greencypher_SecureFlow-VulnerableCodebase
+        run: |
+          curl -sS \
+            -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/issues/search?componentKeys=${SONAR_PROJECT_KEY}&statuses=OPEN,CONFIRMED,REOPENED&ps=500" \
+            -o sonar-issues.json
+
+          # Fail if the SonarCloud API returned an error
+          if jq -e '.errors' sonar-issues.json > /dev/null; then
+            echo "::error::Failed to retrieve SonarQube findings"
+            cat sonar-issues.json
+            exit 1
+          fi
+
+          # Create the JSON artifact for the security gate
+          jq --arg project "$SONAR_PROJECT_KEY" '{
+            project: $project,
+            generated_at: (now | todate),
+            findings: [
+              .issues[] |
+              {
+                key: .key,
+                rule: .rule,
+                severity: .severity,
+                type: .type,
+                message: .message,
+                component: .component,
+                line: .line,
+                status: .status
+              }
+            ]
+          }' sonar-issues.json > sonar-findings.json
+
+          echo "Findings artifact created."
+
+      - name: Upload SonarQube findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonar-findings
+          path: sonar-findings.json
+          if-no-files-found: error
+
+      # =========================
+      # SECURITY GATE
+      # HARD-FAIL ONLY ON CRITICAL/BLOCKER
+      # =========================
+      - name: Enforce SonarQube security gate
+        run: |
+          critical=$(jq '[.findings[] | select(.severity == "CRITICAL")] | length' sonar-findings.json)
+          blocker=$(jq '[.findings[] | select(.severity == "BLOCKER")] | length' sonar-findings.json)
+
+          echo "CRITICAL findings: $critical"
+          echo "BLOCKER findings: $blocker"
+
+          # Show findings that triggered the gate
+          jq '
+            .findings[]
+            | select(.severity == "CRITICAL" or .severity == "BLOCKER")
+            | {
+                severity,
+                type,
+                rule,
+                message,
+                component,
+                line
+              }
+          ' sonar-findings.json
+
+          if [ "$critical" -gt 0 ] || [ "$blocker" -gt 0 ]; then
+            echo "::error::SonarQube security gate FAILED due to CRITICAL/BLOCKER findings"
+            exit 1
+          fi
+
+          echo "SonarQube security gate PASSED"
