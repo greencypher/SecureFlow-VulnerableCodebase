@@ -132,15 +132,15 @@ jobs:
       # =========================
       - name: Enforce SonarQube security gate
         run: |
-          critical=$(jq '[.findings[] | select(.severity == "CRITICAL")] | length' sonar-findings.json)
-          blocker=$(jq '[.findings[] | select(.severity == "BLOCKER")] | length' sonar-findings.json)
+          critical=$(jq '[.issues[] | select(.severity == "CRITICAL")] | length' sonar-findings.json)
+          blocker=$(jq '[.issues[] | select(.severity == "BLOCKER")] | length' sonar-findings.json)
 
-          echo "CRITICAL findings: $critical"
-          echo "BLOCKER findings: $blocker"
+          echo "CRITICAL issues: $critical"
+          echo "BLOCKER issues: $blocker"
 
-          # Show findings that triggered the gate
+          # Show issues that triggered the gate
           jq '
-            .findings[]
+            .issues[]
             | select(.severity == "CRITICAL" or .severity == "BLOCKER")
             | {
                 severity,
