@@ -72,14 +72,14 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
-            -Dsonar.organization=obafemi-samuel-agbi
-            -Dsonar.projectKey=obafemi-samuel-agbi_secureflow-vulnerablecodebase
+            -Dsonar.organization=greencypher
+            -Dsonar.projectKey=greencypher_SecureFlow-VulnerableCodebase
             -Dsonar.sources=.
 
       - name: Retrieve SonarQube findings
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_PROJECT_KEY: obafemi-samuel-agbi_secureflow-vulnerablecodebase
+          SONAR_PROJECT_KEY: greencypher_SecureFlow-VulnerableCodebase
         run: |
           curl -sS \
             -u "${SONAR_TOKEN}:" \
